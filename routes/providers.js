@@ -2,26 +2,14 @@ import express from 'express';
 import Provider from '../models/Provider.js';
 import Service from '../models/Service.js';
 import auth from '../middleware/auth.js';
+import { storage } from '../utils/firebase.js';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
 
 const router = express.Router();
 
-// Multer configuration for photo upload
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadPath = path.join(process.cwd(), 'uploads');
-    if (!fs.existsSync(uploadPath)) {
-      fs.mkdirSync(uploadPath);
-    }
-    cb(null, uploadPath);
-  },
-  filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`);
-  },
-});
-const upload = multer({ storage });
+// Multer configuration for temporary storage
+const upload = multer({ storage: multer.memoryStorage() });
 
 // Get all providers with optional search and location filters
 router.get('/', async (req, res) => {
@@ -39,7 +27,7 @@ router.get('/', async (req, res) => {
       ];
     }
 
-    const providers = await Provider.find(filter).populate('services');
+    const providers = await Provider.find(filter).populate('services').populate('reviews');
     console.log(`Fetched ${providers.length} providers for query:`, { query, location });
     res.json(providers);
   } catch (err) {
@@ -66,7 +54,7 @@ router.get('/:providerId', async (req, res) => {
 // Get provider profile
 router.get('/profile', auth, async (req, res) => {
   try {
-    const provider = await Provider.findOne({ user: req.user.id }).populate('services');
+    const provider = await Provider.findOne({ user: req.user.id }).populate('services').populate('reviews');
     if (!provider) {
       console.log(`Provider not found for user ${req.user.id}`);
       return res.status(404).json({ message: 'Provider profile not found' });
@@ -102,7 +90,7 @@ router.put('/profile', auth, async (req, res) => {
   }
 });
 
-// Upload provider photo
+// Upload provider photo to Firebase
 router.post('/upload-photo', auth, upload.single('photo'), async (req, res) => {
   try {
     const provider = await Provider.findOne({ user: req.user.id });
@@ -110,10 +98,16 @@ router.post('/upload-photo', auth, upload.single('photo'), async (req, res) => {
       console.log(`Provider not found for user ${req.user.id}`);
       return res.status(404).json({ message: 'Provider profile not found' });
     }
-    provider.photo = `/uploads/${req.file.filename}`;
+
+    const file = req.file;
+    const storageRef = ref(storage, `provider_photos/${provider._id}_${Date.now()}_${file.originalname}`);
+    await uploadBytes(storageRef, file.buffer);
+    const photoURL = await getDownloadURL(storageRef);
+
+    provider.photo = photoURL;
     await provider.save();
-    console.log(`Photo uploaded for provider ${provider._id}`);
-    res.json({ photo: provider.photo });
+    console.log(`Photo uploaded for provider ${provider._id}: ${photoURL}`);
+    res.json({ photo: photoURL });
   } catch (err) {
     console.error('Upload photo error:', err);
     res.status(500).json({ message: 'Server error: ' + err.message });

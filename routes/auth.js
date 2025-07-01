@@ -114,26 +114,20 @@ router.post('/create-provider', auth, async (req, res) => {
 
 // Login
 router.post('/login', async (req, res) => {
-  const { email, password } = req.body;
   try {
+    const { email, password } = req.body;
     const user = await User.findOne({ email });
-    if (!user) {
-      console.log(`Login failed: No user found for email ${email}`);
-      return res.status(400).json({ message: 'Invalid credentials' });
-    }
+    if (!user) return res.status(400).json({ message: 'Invalid credentials' });
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      console.log(`Login failed: Invalid password for email ${email}`);
+      console.log(`Login failed for ${email}: Invalid password`);
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
-    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '7d' });
-    const refreshToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '30d' });
-    user.refreshToken = refreshToken;
-    await user.save();
-    console.log(`User logged in: ${user._id}`);
-
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    const refreshToken = jwt.sign({ id: user._id }, process.env.JWT_REFRESH_SECRET, { expiresIn: '7d' });
+    console.log(`User logged in: ${email}`);
     res.json({ token, refreshToken, user: { id: user._id, name: user.name, email, role: user.role } });
   } catch (err) {
     console.error('Login error:', err);
@@ -213,12 +207,13 @@ router.post('/reset-password', async (req, res) => {
     if (!user) return res.status(400).json({ message: 'Invalid or expired OTP' });
 
     const salt = await bcrypt.genSalt(10);
-    user.password = await bcrypt.hash(newPassword, salt);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+    user.password = hashedPassword;
     user.resetPasswordOTP = undefined;
     user.resetPasswordExpires = undefined;
     await user.save();
 
-    console.log(`Password reset for ${email}`);
+    console.log(`Password reset for ${email}, new hashed password: ${hashedPassword}`);
     res.json({ message: 'Password reset successfully' });
   } catch (err) {
     console.error('Reset password error:', err);
